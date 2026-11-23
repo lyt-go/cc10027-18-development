@@ -70,8 +70,13 @@ class CollectCheckpointService(BaseModuleService):
                 all_cps.append(cp)
         return all_cps
 
-    def commit_checkpoint(self, source_key: str) -> dict[str, Any]:
-        """提交采集位点并自动触发下游格式化输出。"""
+    def commit_checkpoint(self, source_key: str, establish_batch: bool = False,
+                          batch_sources: list[str] | None = None) -> dict[str, Any]:
+        """提交采集位点，记录已确认输入范围并自动触发下游格式化输出。
+
+        establish_batch=True 时，把已确认输入范围交给格式输出，
+        据此建立多源导出批次清单（仅建立，不执行导出）。
+        """
         cp = self._read_checkpoint(source_key)
         if cp is None:
             return {"error": f"位点 {source_key} 不存在"}
@@ -85,11 +90,26 @@ class CollectCheckpointService(BaseModuleService):
             "at": time.time(), "action": "commit",
         }])
 
+        # 记录已确认位点快照：格式输出以此作为多源导出批次的已确认输入范围。
+        # 快照独立于日常采集位点，后续继续采集不会覆盖已确认范围。
+        confirmed = {
+            "source_key": source_key,
+            "line_number": int(cp.get("line_number", 0) or 0),
+            "offset": int(cp.get("offset", 0) or 0),
+            "status": "已确认",
+            "confirmed_at": time.time(),
+        }
+        self._write_checkpoint(f"{source_key}_confirmed", confirmed)
+
         result = {
             "source_key": source_key,
             "committed_at": time.time(),
             "offset": cp.get("offset", 0),
             "line_number": cp.get("line_number", 0),
+            "confirmed_range": {
+                "end_line": confirmed["line_number"],
+                "end_offset": confirmed["offset"],
+            },
         }
 
         # 提交后自动触发格式输出
@@ -102,7 +122,35 @@ class CollectCheckpointService(BaseModuleService):
         if "error" not in quality_r:
             result["auto_quality"] = quality_r
 
+        # 提交新位点时建立多源导出批次清单（采集位点 -> 格式输出的范围交接）
+        if establish_batch:
+            try:
+                cls = self._safe_import("app.services.format_output", "FormatOutputService")
+                result["auto_batch"] = cls().create_export_batch(
+                    source_keys=batch_sources, trigger=f"commit:{source_key}")
+            except Exception as e:  # noqa: BLE001 - 自动触发不阻断位点提交
+                result["auto_batch"] = {"error": str(e)}
+
         return result
+
+    def get_confirmed_range(self, source_key: str) -> dict[str, Any] | None:
+        """读取指定源已确认的采集输入范围；未提交过位点则返回 None。"""
+        conf = self._read_checkpoint(f"{source_key}_confirmed")
+        if conf is None:
+            return None
+        return {
+            "source_key": source_key,
+            "end_line": int(conf.get("line_number", 0) or 0),
+            "end_offset": int(conf.get("offset", 0) or 0),
+            "confirmed_at": conf.get("confirmed_at"),
+            "status": conf.get("status", "已确认"),
+        }
+
+    def confirmed_ranges(self, source_keys: list[str] | None = None) -> dict[str, dict[str, Any] | None]:
+        """批量读取已确认输入范围，交给格式输出建立多源导出批次清单。"""
+        if source_keys is None:
+            source_keys = [s["源编号"] for s in self._collect_sources()]
+        return {key: self.get_confirmed_range(key) for key in source_keys}
         """验证采集位点的校验摘要。"""
         cp = self._read_checkpoint(source_key)
         if cp is None:

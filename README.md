@@ -77,5 +77,34 @@ npm run dev
 - 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message }`。
 - 状态流转只允许在 `app/services` 里改，路由层不做业务判断。
 
+## 多源导出批次清单
+
+批量导出不再只汇总已写行数：`collect_checkpoint` 提交位点时记录**已确认输入范围**
+（`<源>_confirmed` 位点快照），`format_output` 据此建立批次清单并发放成品文件。
+
+- 每个批次条目冻结：实际读取的源文件、采集范围 `[start_line, end_line)`、规则版本；
+  无确认位点 / 无新增数据的源记入清单但不发放文件。
+- 成品按源原子落盘到 `data/exports/batches/<批次号>/`，带 SHA 校验摘要；
+  清单持久化在 `data/exports/batches/<批次号>.json`。
+- 下载/续传幂等：已交付条目直接复用（不重导、不改写），中断条目按原批冻结范围
+  接续补做；批次建立后新采集的记录只会进入下一批，不会混进原批。
+- `verify` 逐条对账：成品文件、校验摘要、记录数与冻结范围须全部对应。
+
+接口（前缀 `/api/export-batches`，注册在通用 `/{module}` 路由之前）：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/api/export-batches` | 建立批次清单并发放可用条目成品 |
+| GET | `/api/export-batches` | 列出全部批次清单 |
+| GET | `/api/export-batches/{batch_id}` | 读取批次清单（含每份成品下载依据） |
+| POST | `/api/export-batches/{batch_id}/download` | 幂等下载：复用已交付、接续缺件 |
+| POST | `/api/export-batches/{batch_id}/resume` | 中断接续（与 download 同一幂等入口） |
+| GET | `/api/export-batches/{batch_id}/verify` | 对账已交付成品与原批是否对应 |
+| GET | `/api/export-batches/{batch_id}/files/{source_key}` | 下载批次中指定源的成品文件 |
+
+另有管道端点 `POST /api/pipelines/export-batch`（建立 -> 发放 -> 对账）。
+场景测试见 `backend/test_export_batch.py`：三源各写一段数据，导出中改变 A 的
+位点并中断 C，重复送达下载请求后补做 C，逐条核对成品与原批的对应关系。
+
 领域：数据工程
 子方向：数据采集、爬虫与RPA

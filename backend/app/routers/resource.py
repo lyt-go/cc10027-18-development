@@ -149,6 +149,12 @@ def run_agent_checkpoint_pipeline(agent_code: str) -> dict[str, Any]:
     return pipeline.agent_checkpoint_pipeline(agent_code)
 
 
+@router.post("/pipelines/export-batch")
+def run_export_batch_pipeline(format_type: str = Query(default="jsonl")) -> dict[str, Any]:
+    """执行多源导出批次管道：建立批次清单 -> 发放成品 -> 对账。"""
+    return pipeline.export_batch_pipeline(format_type=format_type)
+
+
 @router.post("/pipelines/run-all")
 def run_all_pipelines() -> dict[str, Any]:
     """运行所有管道组合。"""

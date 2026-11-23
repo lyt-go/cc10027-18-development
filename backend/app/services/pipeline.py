@@ -283,6 +283,25 @@ class CrossModulePipeline:
         results["duration"] = round(time.time() - started_at, 2)
         return results
 
+    def export_batch_pipeline(self, source_keys: list[str] | None = None,
+                              format_type: str = "jsonl") -> dict[str, Any]:
+        """多源导出批次管道：建立批次清单 -> 发放成品 -> 对账。"""
+        started_at = time.time()
+        manifest = self.format_output.create_export_batch(source_keys, format_type)
+        batch_id = manifest["batch_id"]
+        manifest = self.format_output.run_export_batch(batch_id, action="download")
+        verify = self.format_output.verify_export_batch(batch_id)
+        return {
+            "pipeline": "export_batch",
+            "batch_id": batch_id,
+            "status": manifest.get("status"),
+            "totals": manifest.get("totals"),
+            "reconciled": verify.get("reconciled"),
+            "manifest": manifest,
+            "verify": verify,
+            "duration": round(time.time() - started_at, 2),
+        }
+
     def run_all_pipelines(self) -> dict[str, Any]:
         """运行所有管道组合。"""
         started_at = time.time()
